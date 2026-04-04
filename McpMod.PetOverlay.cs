@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 
 #if !STS2_MCP_TESTS
@@ -184,6 +185,132 @@ public sealed record PetOwlVisualSpec(
     }
 }
 
+public sealed record PetOwlRenderRecipe(
+    int TextureSize,
+    float HeadRadiusX,
+    float HeadRadiusY,
+    float FaceRadiusX,
+    float FaceRadiusY,
+    float BodyRadiusX,
+    float BodyRadiusY,
+    float EyeRadius,
+    float WingLift,
+    float WingForward,
+    float RuneScale,
+    float OutlineThickness,
+    float MotionLineLength,
+    float FeatherJitter)
+{
+    public static PetOwlRenderRecipe FromState(PetVisualState state)
+    {
+        return state switch
+        {
+            PetVisualState.Thinking => new PetOwlRenderRecipe(136, 31f, 25f, 22f, 18f, 24f, 27f, 8.4f, -4f, 4f, 1f, 2.2f, 0f, 0f),
+            PetVisualState.Talking => new PetOwlRenderRecipe(136, 31f, 25f, 22f, 18f, 24f, 27f, 8.9f, -7f, 7f, 1.08f, 2.2f, 0f, 0f),
+            PetVisualState.AutoRunning => new PetOwlRenderRecipe(136, 30f, 24f, 21f, 17f, 23f, 26f, 8.2f, -2f, 13f, 1f, 2.3f, 18f, 0f),
+            PetVisualState.Paused => new PetOwlRenderRecipe(136, 31f, 25f, 22f, 18f, 24f, 27f, 8.2f, 1f, 0f, 1f, 2.2f, 0f, 0f),
+            PetVisualState.Error => new PetOwlRenderRecipe(136, 31f, 25f, 22f, 18f, 24f, 27f, 8.6f, 1f, 0f, 1f, 2.4f, 0f, 3f),
+            _ => new PetOwlRenderRecipe(136, 31f, 25f, 22f, 18f, 24f, 27f, 8.6f, 0f, 0f, 1f, 2.2f, 0f, 0f)
+        };
+    }
+}
+
+public sealed record PetOwlAssetManifest(string RelativeDirectory)
+{
+    public static PetOwlAssetManifest Default { get; } = new("pet/owl");
+
+    public string GetRelativePath(PetVisualState state)
+    {
+        var parts = RelativeDirectory
+            .Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries)
+            .Append(GetFileName(state))
+            .ToArray();
+        return Path.Combine(parts);
+    }
+
+    public string[] BuildCandidatePaths(string baseDirectory, PetVisualState state)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
+
+        var relativePath = GetRelativePath(state);
+        return new[]
+        {
+            Path.Combine(baseDirectory, "STS2_MCP.assets", relativePath),
+            Path.Combine(baseDirectory, relativePath)
+        };
+    }
+
+    private static string GetFileName(PetVisualState state)
+    {
+        return state switch
+        {
+            PetVisualState.Thinking => "thinking.png",
+            PetVisualState.Talking => "talking.png",
+            PetVisualState.AutoRunning => "auto_running.png",
+            PetVisualState.Paused => "paused.png",
+            PetVisualState.Error => "error.png",
+            _ => "idle.png"
+        };
+    }
+}
+
+public static class PetOwlAssetSanitizer
+{
+    public const int DefaultChromaThreshold = 18;
+    public const int DefaultExpansionSteps = 3;
+
+    public static bool IsLikelySpriteAnchor(byte red, byte green, byte blue, byte alpha)
+    {
+        if (alpha == 0)
+            return false;
+
+        var max = Math.Max(red, Math.Max(green, blue));
+        var min = Math.Min(red, Math.Min(green, blue));
+        return max - min >= DefaultChromaThreshold;
+    }
+
+    public static bool[,] ExpandMask(bool[,] seedMask, int expansionSteps)
+    {
+        ArgumentNullException.ThrowIfNull(seedMask);
+
+        if (expansionSteps <= 0)
+            return (bool[,])seedMask.Clone();
+
+        var width = seedMask.GetLength(0);
+        var height = seedMask.GetLength(1);
+        var current = (bool[,])seedMask.Clone();
+
+        for (var step = 0; step < expansionSteps; step++)
+        {
+            var next = (bool[,])current.Clone();
+
+            for (var x = 0; x < width; x++)
+            {
+                for (var y = 0; y < height; y++)
+                {
+                    if (!current[x, y])
+                        continue;
+
+                    for (var offsetX = -1; offsetX <= 1; offsetX++)
+                    {
+                        for (var offsetY = -1; offsetY <= 1; offsetY++)
+                        {
+                            var nx = x + offsetX;
+                            var ny = y + offsetY;
+                            if (nx >= 0 && ny >= 0 && nx < width && ny < height)
+                                next[nx, ny] = true;
+                        }
+                    }
+                }
+            }
+
+            current = next;
+        }
+
+        return current;
+    }
+}
+
 #if !STS2_MCP_TESTS
 internal sealed class PetOverlayController
 {
@@ -203,9 +330,8 @@ internal sealed class PetOverlayController
     private PanelContainer? _menuPanel;
     private VBoxContainer? _menuList;
     private Label? _badgeLabel;
-    private PetBodyControl? _petBody;
+    private TextureRect? _petSprite;
     private PetOverlayViewModel? _lastViewModel;
-    private int _refreshLogCount;
 
     public PetOverlayController(PetStateStore store)
     {
@@ -222,7 +348,6 @@ internal sealed class PetOverlayController
 
         BuildTree();
         tree.Root.AddChild(_layer);
-        GD.Print("[STS2 MCP] Pet overlay layer attached.");
         Refresh();
     }
 
@@ -251,18 +376,8 @@ internal sealed class PetOverlayController
         if (_badgeLabel != null)
             _badgeLabel.Text = viewModel.ModeBadgeText;
 
-        if (_petBody != null)
-            _petBody.VisualState = viewModel.VisualState;
-
-        if (_refreshLogCount < 8)
-        {
-            _refreshLogCount++;
-            var petSize = _petBody?.Size.ToString() ?? "<null>";
-            var petMin = _petBody?.CustomMinimumSize.ToString() ?? "<null>";
-            GD.Print(
-                $"[STS2 MCP] Refresh state={viewModel.VisualState} mode={viewModel.Mode} " +
-                $"showBubble={viewModel.ShowBubble} petSize={petSize} petMin={petMin}");
-        }
+        if (_petSprite != null)
+            _petSprite.Texture = PetOwlTextureFactory.GetTexture(viewModel.VisualState);
 
         if (_lastViewModel == null || !_lastViewModel.HasEquivalentMenu(viewModel))
             RebuildMenu(viewModel);
@@ -392,15 +507,17 @@ internal sealed class PetOverlayController
         petPanel.GuiInput += OnPetGuiInput;
         footer.AddChild(petPanel);
 
-        _petBody = new PetBodyControl
+        _petSprite = new TextureRect
         {
             CustomMinimumSize = new Vector2(68, 68),
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
             SizeFlagsVertical = Control.SizeFlags.ExpandFill,
-            MouseFilter = Control.MouseFilterEnum.Ignore
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+            ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
+            StretchMode = TextureRect.StretchModeEnum.Scale
         };
-        petPanel.AddChild(_petBody);
-        GD.Print("[STS2 MCP] PetBodyControl created and added to pet panel.");
+        _petSprite.Texture = PetOwlTextureFactory.GetTexture(PetVisualState.Paused);
+        petPanel.AddChild(_petSprite);
     }
 
     private void RebuildMenu(PetOverlayViewModel viewModel)
@@ -526,330 +643,417 @@ internal sealed class PetOverlayController
     }
 }
 
-internal sealed partial class PetBodyControl : Control
+internal static class PetOwlTextureFactory
 {
-    private PetVisualState _visualState = PetVisualState.Paused;
-    private int _drawLogCount;
-    private int _resizeLogCount;
-    private int _stateLogCount;
+    private static readonly Dictionary<PetVisualState, Texture2D> _cache = new();
+    private static readonly HashSet<PetVisualState> _loggedFallbackStates = new();
+    private static readonly HashSet<PetVisualState> _loggedExternalStates = new();
 
-    public PetVisualState VisualState
+    public static Texture2D GetTexture(PetVisualState state)
     {
-        get => _visualState;
-        set
-        {
-            if (_visualState == value)
-                return;
+        if (_cache.TryGetValue(state, out var texture))
+            return texture;
 
-            if (_stateLogCount < 8)
-            {
-                _stateLogCount++;
-                GD.Print($"[STS2 MCP] PetBodyControl state {_visualState} -> {value}");
-            }
-
-            _visualState = value;
-            QueueRedraw();
-        }
+        texture = TryLoadExternalTexture(state) ?? BuildTexture(state);
+        _cache[state] = texture;
+        return texture;
     }
 
-    public override void _Draw()
+    private static Texture2D? TryLoadExternalTexture(PetVisualState state)
     {
-        if (_drawLogCount < 8)
+        var assemblyDirectory = Path.GetDirectoryName(typeof(McpMod).Assembly.Location);
+        if (string.IsNullOrWhiteSpace(assemblyDirectory))
+            return null;
+
+        foreach (var candidate in PetOwlAssetManifest.Default.BuildCandidatePaths(assemblyDirectory, state))
         {
-            _drawLogCount++;
-            GD.Print($"[STS2 MCP] PetBodyControl _Draw size={Size} position={Position} state={_visualState}");
+            if (!File.Exists(candidate))
+                continue;
+
+            var image = Image.LoadFromFile(candidate);
+            if (image.GetWidth() <= 0 || image.GetHeight() <= 0)
+                continue;
+
+            SanitizeExternalImage(image);
+
+            if (_loggedExternalStates.Add(state))
+                GD.Print($"[STS2 MCP] Loaded pet asset for {state} from {candidate}");
+
+            return ImageTexture.CreateFromImage(image);
         }
 
-        var spec = PetOwlVisualSpec.FromState(_visualState);
-        var center = Size / 2f;
-        var bodyCenter = center + new Vector2(spec.BodyLean * 10f, 8f);
-        var headCenter = center + new Vector2(spec.BodyLean * 6f, -11f + spec.HeadTilt * 12f);
+        if (_loggedFallbackStates.Add(state))
+            GD.Print($"[STS2 MCP] No external pet asset found for {state}; using generated fallback.");
 
-        var outline = new Color(0.12f, 0.10f, 0.24f);
-        var bodyBase = spec.IsRuffled ? new Color(0.26f, 0.27f, 0.52f) : new Color(0.22f, 0.22f, 0.48f);
-        var bodyShade = new Color(0.16f, 0.15f, 0.34f);
-        var faceMask = new Color(0.68f, 0.78f, 0.98f);
-        var faceShade = new Color(0.44f, 0.54f, 0.84f);
-        var glowBlue = new Color(0.38f, 0.88f, 1.0f);
-        var gold = new Color(0.97f, 0.76f, 0.28f);
-        var footColor = new Color(0.62f, 0.45f, 0.20f);
-        var errorRed = new Color(0.88f, 0.22f, 0.24f);
+        return null;
+    }
 
-        if (spec.ShowSpeedLines)
-            DrawSpeedLines(bodyCenter);
+    private static Texture2D BuildTexture(PetVisualState state)
+    {
+        var spec = PetOwlVisualSpec.FromState(state);
+        var recipe = PetOwlRenderRecipe.FromState(state);
+        var image = Image.CreateEmpty(recipe.TextureSize, recipe.TextureSize, false, Image.Format.Rgba8);
+        image.Fill(Colors.Transparent);
 
-        DrawTail(bodyCenter, bodyShade, outline);
-        DrawBody(bodyCenter, bodyBase, bodyShade, outline, spec.IsRuffled);
-        DrawWing(bodyCenter, true, spec.WingPose, bodyBase, outline);
-        DrawWing(bodyCenter, false, spec.WingPose, bodyBase, outline);
-        DrawHead(headCenter, bodyBase, outline);
-        DrawFaceMask(headCenter, faceMask, faceShade);
-        DrawFeet(bodyCenter, footColor, outline);
+        var scale = recipe.TextureSize / 68f;
+        var bodyCenter = new Vector2(recipe.TextureSize * 0.5f + spec.BodyLean * 8f * scale, 43f * scale);
+        var headCenter = new Vector2(recipe.TextureSize * 0.5f + spec.BodyLean * 5f * scale, 21f * scale + spec.HeadTilt * 6f * scale);
+
+        var outline = new Color(0.10f, 0.09f, 0.18f, 1f);
+        var bodyBase = spec.IsRuffled ? new Color(0.28f, 0.29f, 0.57f, 1f) : new Color(0.24f, 0.25f, 0.54f, 1f);
+        var bodyShade = new Color(0.15f, 0.15f, 0.33f, 1f);
+        var faceMask = new Color(0.72f, 0.81f, 1.0f, 1f);
+        var faceShade = new Color(0.50f, 0.61f, 0.91f, 1f);
+        var glowBlue = new Color(0.38f, 0.90f, 1f, 1f);
+        var gold = new Color(0.98f, 0.78f, 0.34f, 1f);
+        var footColor = new Color(0.74f, 0.54f, 0.24f, 1f);
+        var errorRed = new Color(0.90f, 0.24f, 0.28f, 1f);
+
+        FillEllipse(image, bodyCenter + new Vector2(0f, 8f * scale), new Vector2(recipe.BodyRadiusX * 0.92f * scale, recipe.BodyRadiusY * 0.96f * scale), new Color(0f, 0f, 0f, 0.15f));
+
+        if (spec.ShowSpeedLines && recipe.MotionLineLength > 0f)
+            DrawSpeedLines(image, bodyCenter, glowBlue, recipe.MotionLineLength * scale);
+
+        DrawTail(image, bodyCenter, bodyShade, outline, scale, recipe.OutlineThickness);
+        DrawBody(image, bodyCenter, recipe, bodyBase, bodyShade, outline, spec.IsRuffled, scale);
+        DrawWing(image, bodyCenter, recipe, true, spec.WingPose, bodyBase, outline, scale);
+        DrawWing(image, bodyCenter, recipe, false, spec.WingPose, bodyBase, outline, scale);
+        DrawHead(image, headCenter, recipe, bodyBase, outline, scale);
+        DrawFaceMask(image, headCenter, recipe, faceMask, faceShade, scale);
+        DrawFeet(image, bodyCenter, footColor, outline, scale);
 
         if (spec.ShowChestRune)
-            DrawChestRune(bodyCenter, gold);
+            DrawChestRune(image, bodyCenter, gold, scale, recipe.RuneScale);
 
-        DrawBeak(headCenter, gold, outline, spec.BeakOpen);
-        DrawEyes(headCenter, spec, glowBlue, outline, errorRed);
+        DrawBeak(image, headCenter, gold, outline, spec.BeakOpen, scale);
+        DrawEyes(image, headCenter, recipe, spec, glowBlue, outline, errorRed, scale);
 
         if (spec.ShowTalkWaves)
-            DrawTalkWaves(headCenter, glowBlue);
+            DrawTalkWaves(image, headCenter, glowBlue, scale);
 
         if (spec.ShowErrorMarks)
-            DrawErrorMarks(headCenter, errorRed);
+            DrawErrorMarks(image, headCenter, errorRed, scale);
+
+        if (recipe.FeatherJitter > 0f)
+            DrawFeatherJitter(image, bodyCenter, outline, recipe.FeatherJitter * scale);
+
+        image.Resize(68, 68, Image.Interpolation.Bilinear);
+        return ImageTexture.CreateFromImage(image);
     }
 
-    public override void _Ready()
+    private static void SanitizeExternalImage(Image image)
     {
-        SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
-        GD.Print($"[STS2 MCP] PetBodyControl _Ready size={Size} min={CustomMinimumSize}");
-        QueueRedraw();
-    }
+        var width = image.GetWidth();
+        var height = image.GetHeight();
+        if (width <= 0 || height <= 0)
+            return;
 
-    public override void _Notification(int what)
-    {
-        if (what == NotificationResized)
+        var seedMask = new bool[width, height];
+        var hasColoredAnchors = false;
+
+        for (var x = 0; x < width; x++)
         {
-            if (_resizeLogCount < 8)
+            for (var y = 0; y < height; y++)
             {
-                _resizeLogCount++;
-                GD.Print($"[STS2 MCP] PetBodyControl resized size={Size}");
+                var color = image.GetPixel(x, y);
+                var alpha = (byte)Math.Clamp((int)MathF.Round(color.A * 255f), 0, 255);
+                var red = (byte)Math.Clamp((int)MathF.Round(color.R * 255f), 0, 255);
+                var green = (byte)Math.Clamp((int)MathF.Round(color.G * 255f), 0, 255);
+                var blue = (byte)Math.Clamp((int)MathF.Round(color.B * 255f), 0, 255);
+
+                if (!PetOwlAssetSanitizer.IsLikelySpriteAnchor(red, green, blue, alpha))
+                    continue;
+
+                seedMask[x, y] = true;
+                hasColoredAnchors = true;
             }
-            QueueRedraw();
+        }
+
+        if (!hasColoredAnchors)
+            return;
+
+        var protectedMask = PetOwlAssetSanitizer.ExpandMask(seedMask, PetOwlAssetSanitizer.DefaultExpansionSteps);
+        var transparent = Colors.Transparent;
+
+        for (var x = 0; x < width; x++)
+        {
+            for (var y = 0; y < height; y++)
+            {
+                if (!protectedMask[x, y])
+                    image.SetPixel(x, y, transparent);
+            }
         }
     }
 
-    private void DrawTail(Vector2 bodyCenter, Color color, Color outline)
+    private static void DrawTail(Image image, Vector2 bodyCenter, Color color, Color outline, float scale, float outlineThickness)
     {
-        var points = new[]
-        {
-            bodyCenter + new Vector2(-8f, 20f),
-            bodyCenter + new Vector2(0f, 28f),
-            bodyCenter + new Vector2(8f, 20f),
-            bodyCenter + new Vector2(0f, 18f)
-        };
-        DrawColoredPolygon(points, color);
-        DrawPolyline(points.Append(points[0]).ToArray(), outline, 1.5f);
+        FillTriangle(image, bodyCenter + new Vector2(-8f, 20f) * scale, bodyCenter + new Vector2(0f, 30f) * scale, bodyCenter + new Vector2(8f, 20f) * scale, color);
+        DrawLine(image, bodyCenter + new Vector2(-8f, 20f) * scale, bodyCenter + new Vector2(0f, 30f) * scale, outline, (int)MathF.Round(outlineThickness));
+        DrawLine(image, bodyCenter + new Vector2(0f, 30f) * scale, bodyCenter + new Vector2(8f, 20f) * scale, outline, (int)MathF.Round(outlineThickness));
     }
 
-    private void DrawBody(Vector2 bodyCenter, Color fill, Color shade, Color outline, bool isRuffled)
+    private static void DrawBody(Image image, Vector2 bodyCenter, PetOwlRenderRecipe recipe, Color fill, Color shade, Color outline, bool isRuffled, float scale)
     {
-        DrawEllipse(bodyCenter, new Vector2(20f, 24f), fill);
-        DrawEllipse(bodyCenter + new Vector2(0f, 6f), new Vector2(14f, 16f), shade);
+        FillEllipse(image, bodyCenter, new Vector2(recipe.BodyRadiusX * scale, recipe.BodyRadiusY * scale), fill);
+        FillEllipse(image, bodyCenter + new Vector2(0f, 7f * scale), new Vector2(recipe.BodyRadiusX * 0.62f * scale, recipe.BodyRadiusY * 0.58f * scale), shade);
+        OutlineEllipse(image, bodyCenter, new Vector2(recipe.BodyRadiusX * scale, recipe.BodyRadiusY * scale), outline, recipe.OutlineThickness);
 
         if (isRuffled)
         {
-            var tufts = new[]
-            {
-                bodyCenter + new Vector2(-14f, -8f),
-                bodyCenter + new Vector2(-22f, 2f),
-                bodyCenter + new Vector2(-12f, 8f),
-                bodyCenter + new Vector2(0f, 6f),
-                bodyCenter + new Vector2(12f, 8f),
-                bodyCenter + new Vector2(22f, 2f),
-                bodyCenter + new Vector2(14f, -8f)
-            };
-            DrawPolyline(tufts, outline, 2f);
+            DrawLine(image, bodyCenter + new Vector2(-15f, -2f) * scale, bodyCenter + new Vector2(-20f, 2f) * scale, outline, 1);
+            DrawLine(image, bodyCenter + new Vector2(15f, -2f) * scale, bodyCenter + new Vector2(20f, 2f) * scale, outline, 1);
         }
     }
 
-    private void DrawWing(Vector2 bodyCenter, bool isLeft, PetOwlWingPose pose, Color fill, Color outline)
+    private static void DrawWing(Image image, Vector2 bodyCenter, PetOwlRenderRecipe recipe, bool isLeft, PetOwlWingPose pose, Color fill, Color outline, float scale)
     {
         var side = isLeft ? -1f : 1f;
-        var offset = pose switch
+        var shoulder = pose switch
         {
-            PetOwlWingPose.Gesture when !isLeft => new Vector2(8f, -4f),
-            PetOwlWingPose.Talk when !isLeft => new Vector2(10f, 0f),
-            PetOwlWingPose.Dash => new Vector2(side * 4f, 4f),
-            _ => new Vector2(side * 12f, 6f)
+            PetOwlWingPose.Gesture when !isLeft => bodyCenter + new Vector2((6f + recipe.WingForward) * scale, (-2f + recipe.WingLift) * scale),
+            PetOwlWingPose.Talk when !isLeft => bodyCenter + new Vector2((8f + recipe.WingForward) * scale, recipe.WingLift * scale),
+            PetOwlWingPose.Dash => bodyCenter + new Vector2(side * 3f * scale, 7f * scale),
+            _ => bodyCenter + new Vector2(side * 13f * scale, (5f + recipe.WingLift * 0.2f) * scale)
         };
-        var size = pose == PetOwlWingPose.Dash ? new Vector2(8f, 14f) : new Vector2(9f, 16f);
-        var center = bodyCenter + offset;
-        var angle = pose switch
+        var tip = pose switch
         {
-            PetOwlWingPose.Gesture when !isLeft => side * 0.7f,
-            PetOwlWingPose.Talk when !isLeft => side * 0.45f,
-            PetOwlWingPose.Dash => side * 1.2f,
-            _ => side * 0.18f
+            PetOwlWingPose.Gesture when !isLeft => bodyCenter + new Vector2(24f * scale, 10f * scale),
+            PetOwlWingPose.Talk when !isLeft => bodyCenter + new Vector2(22f * scale, 15f * scale),
+            PetOwlWingPose.Dash => bodyCenter + new Vector2(side * (18f + recipe.WingForward) * scale, (-4f + recipe.WingLift) * scale),
+            _ => bodyCenter + new Vector2(side * 20f * scale, 18f * scale)
         };
-
-        var points = CreateLeafPolygon(center, size, angle, side);
-        DrawColoredPolygon(points, fill);
-        DrawPolyline(points.Append(points[0]).ToArray(), outline, 1.5f);
+        var tail = bodyCenter + new Vector2(side * 10f * scale, 18f * scale);
+        FillTriangle(image, shoulder, tip, tail, fill);
+        DrawLine(image, shoulder, tip, outline, 1);
+        DrawLine(image, tip, tail, outline, 1);
     }
 
-    private void DrawHead(Vector2 headCenter, Color fill, Color outline)
+    private static void DrawHead(Image image, Vector2 headCenter, PetOwlRenderRecipe recipe, Color fill, Color outline, float scale)
     {
-        DrawEllipse(headCenter + new Vector2(0f, 2f), new Vector2(18f, 16f), fill);
-        var leftTuft = new[]
-        {
-            headCenter + new Vector2(-10f, -7f),
-            headCenter + new Vector2(-18f, -18f),
-            headCenter + new Vector2(-4f, -12f)
-        };
-        var rightTuft = new[]
-        {
-            headCenter + new Vector2(10f, -7f),
-            headCenter + new Vector2(18f, -18f),
-            headCenter + new Vector2(4f, -12f)
-        };
-        DrawColoredPolygon(leftTuft, fill);
-        DrawColoredPolygon(rightTuft, fill);
-        DrawPolyline(leftTuft.Append(leftTuft[0]).ToArray(), outline, 1.5f);
-        DrawPolyline(rightTuft.Append(rightTuft[0]).ToArray(), outline, 1.5f);
+        FillEllipse(image, headCenter + new Vector2(0f, 2f * scale), new Vector2(recipe.HeadRadiusX * scale, recipe.HeadRadiusY * scale), fill);
+        OutlineEllipse(image, headCenter + new Vector2(0f, 2f * scale), new Vector2(recipe.HeadRadiusX * scale, recipe.HeadRadiusY * scale), outline, recipe.OutlineThickness);
+        FillTriangle(image, headCenter + new Vector2(-14f, -3f) * scale, headCenter + new Vector2(-19f, -14f) * scale, headCenter + new Vector2(-6f, -10f) * scale, fill);
+        FillTriangle(image, headCenter + new Vector2(14f, -3f) * scale, headCenter + new Vector2(19f, -14f) * scale, headCenter + new Vector2(6f, -10f) * scale, fill);
     }
 
-    private void DrawFaceMask(Vector2 headCenter, Color fill, Color shade)
+    private static void DrawFaceMask(Image image, Vector2 headCenter, PetOwlRenderRecipe recipe, Color fill, Color shade, float scale)
     {
-        DrawEllipse(headCenter + new Vector2(0f, 3f), new Vector2(13f, 11f), fill);
-        var chestPlate = new[]
-        {
-            headCenter + new Vector2(0f, 3f),
-            headCenter + new Vector2(-8f, 14f),
-            headCenter + new Vector2(0f, 20f),
-            headCenter + new Vector2(8f, 14f)
-        };
-        DrawColoredPolygon(chestPlate, shade);
+        FillEllipse(image, headCenter + new Vector2(0f, 4f * scale), new Vector2(recipe.FaceRadiusX * scale, recipe.FaceRadiusY * scale), fill);
+        FillTriangle(image, headCenter + new Vector2(-11f, 14f) * scale, headCenter + new Vector2(0f, 23f) * scale, headCenter + new Vector2(11f, 14f) * scale, shade);
     }
 
-    private void DrawFeet(Vector2 bodyCenter, Color fill, Color outline)
+    private static void DrawFeet(Image image, Vector2 bodyCenter, Color fill, Color outline, float scale)
     {
-        DrawFoot(bodyCenter + new Vector2(-6f, 25f), fill, outline);
-        DrawFoot(bodyCenter + new Vector2(6f, 25f), fill, outline);
+        DrawFoot(image, bodyCenter + new Vector2(-7f, 26f) * scale, fill, outline, scale);
+        DrawFoot(image, bodyCenter + new Vector2(7f, 26f) * scale, fill, outline, scale);
     }
 
-    private void DrawFoot(Vector2 center, Color fill, Color outline)
+    private static void DrawFoot(Image image, Vector2 center, Color fill, Color outline, float scale)
     {
-        var points = new[]
-        {
-            center + new Vector2(-4f, 0f),
-            center + new Vector2(-2f, 4f),
-            center + new Vector2(0f, 0f),
-            center + new Vector2(2f, 4f),
-            center + new Vector2(4f, 0f),
-            center + new Vector2(0f, -3f)
-        };
-        DrawColoredPolygon(points, fill);
-        DrawPolyline(points.Append(points[0]).ToArray(), outline, 1.2f);
+        DrawLine(image, center + new Vector2(-3f, 0f) * scale, center + new Vector2(-5f, 4f) * scale, fill, 1);
+        DrawLine(image, center + new Vector2(0f, 0f) * scale, center + new Vector2(0f, 4f) * scale, fill, 1);
+        DrawLine(image, center + new Vector2(3f, 0f) * scale, center + new Vector2(5f, 4f) * scale, fill, 1);
     }
 
-    private void DrawChestRune(Vector2 bodyCenter, Color color)
+    private static void DrawChestRune(Image image, Vector2 bodyCenter, Color color, float scale, float runeScale)
     {
-        var stroke = 2.4f;
-        DrawLine(bodyCenter + new Vector2(-1f, -5f), bodyCenter + new Vector2(-1f, 8f), color, stroke);
-        DrawLine(bodyCenter + new Vector2(-1f, -5f), bodyCenter + new Vector2(9f, 1f), color, stroke);
-        DrawLine(bodyCenter + new Vector2(9f, 1f), bodyCenter + new Vector2(-1f, 8f), color, stroke);
+        var vertical = 7f * runeScale * scale;
+        var arm = 5.5f * runeScale * scale;
+        DrawLine(image, bodyCenter + new Vector2(-1f * scale, -vertical), bodyCenter + new Vector2(-1f * scale, vertical), color, 2);
+        DrawLine(image, bodyCenter + new Vector2(-1f * scale, -vertical), bodyCenter + new Vector2(arm, -1f * scale), color, 2);
+        DrawLine(image, bodyCenter + new Vector2(arm, -1f * scale), bodyCenter + new Vector2(-1f * scale, vertical), color, 2);
     }
 
-    private void DrawBeak(Vector2 headCenter, Color fill, Color outline, bool beakOpen)
+    private static void DrawBeak(Image image, Vector2 headCenter, Color fill, Color outline, bool beakOpen, float scale)
     {
-        var top = new[]
-        {
-            headCenter + new Vector2(0f, 4f),
-            headCenter + new Vector2(-4f, 10f),
-            headCenter + new Vector2(0f, 14f),
-            headCenter + new Vector2(4f, 10f)
-        };
-        DrawColoredPolygon(top, fill);
-        DrawPolyline(top.Append(top[0]).ToArray(), outline, 1.3f);
+        FillTriangle(image, headCenter + new Vector2(-5f, 10f) * scale, headCenter + new Vector2(5f, 10f) * scale, headCenter + new Vector2(0f, 17f) * scale, fill);
 
         if (!beakOpen)
             return;
 
-        var lower = new[]
-        {
-            headCenter + new Vector2(0f, 14f),
-            headCenter + new Vector2(-3f, 17f),
-            headCenter + new Vector2(3f, 17f)
-        };
-        DrawColoredPolygon(lower, new Color(0.88f, 0.56f, 0.20f));
-        DrawPolyline(lower.Append(lower[0]).ToArray(), outline, 1.1f);
+        FillTriangle(image, headCenter + new Vector2(-4f, 17f) * scale, headCenter + new Vector2(4f, 17f) * scale, headCenter + new Vector2(0f, 21f) * scale, new Color(0.88f, 0.56f, 0.20f, 1f));
     }
 
-    private void DrawEyes(Vector2 headCenter, PetOwlVisualSpec spec, Color glowBlue, Color outline, Color errorRed)
+    private static void DrawEyes(Image image, Vector2 headCenter, PetOwlRenderRecipe recipe, PetOwlVisualSpec spec, Color glowBlue, Color outline, Color errorRed, float scale)
     {
-        var leftEye = headCenter + new Vector2(-7f, 2f);
-        var rightEye = headCenter + new Vector2(7f, 2f);
+        var leftEye = headCenter + new Vector2(-8f * scale, 2f * scale);
+        var rightEye = headCenter + new Vector2(8f * scale, 2f * scale);
 
         switch (spec.EyeState)
         {
             case PetOwlEyeState.Closed:
-                DrawArc(leftEye, 4f, MathF.PI * 0.15f, MathF.PI * 0.85f, 12, outline, 2f);
-                DrawArc(rightEye, 4f, MathF.PI * 0.15f, MathF.PI * 0.85f, 12, outline, 2f);
+                DrawArc(image, leftEye, 5f * scale, 0.4f, 2.7f, outline);
+                DrawArc(image, rightEye, 5f * scale, 0.4f, 2.7f, outline);
                 return;
             case PetOwlEyeState.Crossed:
-                DrawEyeCross(leftEye, errorRed);
-                DrawEyeCross(rightEye, errorRed);
+                DrawEyeCross(image, leftEye, errorRed, scale);
+                DrawEyeCross(image, rightEye, errorRed, scale);
                 return;
         }
 
-        var eyeRadius = spec.EyeState == PetOwlEyeState.Wide ? 5f : 4.3f;
-        var pupilOffsetY = spec.EyeState == PetOwlEyeState.Focused ? 1.2f : 0.2f;
-        DrawCircle(leftEye, eyeRadius, glowBlue);
-        DrawCircle(rightEye, eyeRadius, glowBlue);
-        DrawCircle(leftEye + new Vector2(0f, pupilOffsetY), 2.1f, outline);
-        DrawCircle(rightEye + new Vector2(0f, pupilOffsetY), 2.1f, outline);
-        DrawCircle(leftEye + new Vector2(-1.2f, -1.5f), 0.8f, Colors.White);
-        DrawCircle(rightEye + new Vector2(-1.2f, -1.5f), 0.8f, Colors.White);
+        var eyeRadius = recipe.EyeRadius * scale;
+        var pupilOffsetY = spec.EyeState == PetOwlEyeState.Focused ? 1.5f * scale : 0.3f * scale;
+        FillCircle(image, leftEye, eyeRadius, glowBlue);
+        FillCircle(image, rightEye, eyeRadius, glowBlue);
+        FillCircle(image, leftEye + new Vector2(0f, pupilOffsetY), 3.2f * scale, outline);
+        FillCircle(image, rightEye + new Vector2(0f, pupilOffsetY), 3.2f * scale, outline);
+        FillCircle(image, leftEye + new Vector2(-2.1f * scale, -2.4f * scale), 1.3f * scale, Colors.White);
+        FillCircle(image, rightEye + new Vector2(-2.1f * scale, -2.4f * scale), 1.3f * scale, Colors.White);
     }
 
-    private void DrawTalkWaves(Vector2 headCenter, Color color)
+    private static void DrawTalkWaves(Image image, Vector2 headCenter, Color color, float scale)
     {
-        DrawArc(headCenter + new Vector2(18f, 4f), 4f, -0.8f, 0.8f, 10, color, 1.6f);
-        DrawArc(headCenter + new Vector2(23f, 4f), 6f, -0.8f, 0.8f, 10, color, 1.6f);
+        DrawArc(image, headCenter + new Vector2(19f, 4f) * scale, 5f * scale, -0.8f, 0.8f, color);
+        DrawArc(image, headCenter + new Vector2(26f, 4f) * scale, 7f * scale, -0.8f, 0.8f, color);
     }
 
-    private void DrawErrorMarks(Vector2 headCenter, Color color)
+    private static void DrawErrorMarks(Image image, Vector2 headCenter, Color color, float scale)
     {
-        DrawLine(headCenter + new Vector2(-16f, -11f), headCenter + new Vector2(-10f, -15f), color, 2f);
-        DrawLine(headCenter + new Vector2(-16f, -15f), headCenter + new Vector2(-10f, -11f), color, 2f);
-        DrawLine(headCenter + new Vector2(10f, -11f), headCenter + new Vector2(16f, -15f), color, 2f);
-        DrawLine(headCenter + new Vector2(10f, -15f), headCenter + new Vector2(16f, -11f), color, 2f);
+        DrawLine(image, headCenter + new Vector2(-17f, -12f) * scale, headCenter + new Vector2(-10f, -18f) * scale, color, 2);
+        DrawLine(image, headCenter + new Vector2(-17f, -18f) * scale, headCenter + new Vector2(-10f, -12f) * scale, color, 2);
+        DrawLine(image, headCenter + new Vector2(10f, -12f) * scale, headCenter + new Vector2(17f, -18f) * scale, color, 2);
+        DrawLine(image, headCenter + new Vector2(10f, -18f) * scale, headCenter + new Vector2(17f, -12f) * scale, color, 2);
     }
 
-    private void DrawSpeedLines(Vector2 bodyCenter)
+    private static void DrawSpeedLines(Image image, Vector2 bodyCenter, Color color, float length)
     {
-        var color = new Color(0.40f, 0.86f, 1f, 0.85f);
-        DrawLine(bodyCenter + new Vector2(-26f, -4f), bodyCenter + new Vector2(-12f, -4f), color, 2f);
-        DrawLine(bodyCenter + new Vector2(-24f, 2f), bodyCenter + new Vector2(-10f, 2f), color, 2f);
-        DrawLine(bodyCenter + new Vector2(-20f, 8f), bodyCenter + new Vector2(-8f, 8f), color, 2f);
+        DrawLine(image, bodyCenter + new Vector2(-length, -8f), bodyCenter + new Vector2(-10f, -8f), color, 2);
+        DrawLine(image, bodyCenter + new Vector2(-(length - 4f), 2f), bodyCenter + new Vector2(-8f, 2f), color, 2);
+        DrawLine(image, bodyCenter + new Vector2(-(length - 8f), 12f), bodyCenter + new Vector2(-6f, 12f), color, 2);
     }
 
-    private void DrawEyeCross(Vector2 center, Color color)
+    private static void DrawEyeCross(Image image, Vector2 center, Color color, float scale)
     {
-        DrawLine(center + new Vector2(-3f, -3f), center + new Vector2(3f, 3f), color, 2f);
-        DrawLine(center + new Vector2(-3f, 3f), center + new Vector2(3f, -3f), color, 2f);
+        DrawLine(image, center + new Vector2(-4f, -4f) * scale, center + new Vector2(4f, 4f) * scale, color, 2);
+        DrawLine(image, center + new Vector2(-4f, 4f) * scale, center + new Vector2(4f, -4f) * scale, color, 2);
     }
 
-    private void DrawEllipse(Vector2 center, Vector2 radius, Color color, int segments = 28)
+    private static void DrawFeatherJitter(Image image, Vector2 bodyCenter, Color color, float amount)
     {
-        var points = new Vector2[segments];
-        for (var index = 0; index < segments; index++)
+        DrawLine(image, bodyCenter + new Vector2(-20f, -6f), bodyCenter + new Vector2(-24f, -6f - amount), color, 1);
+        DrawLine(image, bodyCenter + new Vector2(20f, -6f), bodyCenter + new Vector2(24f, -6f - amount), color, 1);
+        DrawLine(image, bodyCenter + new Vector2(0f, -24f), bodyCenter + new Vector2(0f, -28f - amount), color, 1);
+    }
+
+    private static void FillEllipse(Image image, Vector2 center, Vector2 radius, Color color)
+    {
+        var minX = Math.Max(0, (int)MathF.Floor(center.X - radius.X));
+        var maxX = Math.Min(image.GetWidth() - 1, (int)MathF.Ceiling(center.X + radius.X));
+        var minY = Math.Max(0, (int)MathF.Floor(center.Y - radius.Y));
+        var maxY = Math.Min(image.GetHeight() - 1, (int)MathF.Ceiling(center.Y + radius.Y));
+
+        for (var y = minY; y <= maxY; y++)
         {
-            var angle = MathF.Tau * index / segments;
-            points[index] = center + new Vector2(MathF.Cos(angle) * radius.X, MathF.Sin(angle) * radius.Y);
+            for (var x = minX; x <= maxX; x++)
+            {
+                var dx = (x - center.X) / radius.X;
+                var dy = (y - center.Y) / radius.Y;
+                if (dx * dx + dy * dy <= 1f)
+                    image.SetPixel(x, y, color);
+            }
+        }
+    }
+
+    private static void OutlineEllipse(Image image, Vector2 center, Vector2 radius, Color color, float thickness)
+    {
+        var minX = Math.Max(0, (int)MathF.Floor(center.X - radius.X - thickness));
+        var maxX = Math.Min(image.GetWidth() - 1, (int)MathF.Ceiling(center.X + radius.X + thickness));
+        var minY = Math.Max(0, (int)MathF.Floor(center.Y - radius.Y - thickness));
+        var maxY = Math.Min(image.GetHeight() - 1, (int)MathF.Ceiling(center.Y + radius.Y + thickness));
+
+        for (var y = minY; y <= maxY; y++)
+        {
+            for (var x = minX; x <= maxX; x++)
+            {
+                var dx = (x - center.X) / radius.X;
+                var dy = (y - center.Y) / radius.Y;
+                var dist = dx * dx + dy * dy;
+                if (dist <= 1f && dist >= 1f - (0.12f * thickness))
+                    image.SetPixel(x, y, color);
+            }
+        }
+    }
+
+    private static void FillCircle(Image image, Vector2 center, float radius, Color color)
+    {
+        FillEllipse(image, center, new Vector2(radius, radius), color);
+    }
+
+    private static void FillTriangle(Image image, Vector2 a, Vector2 b, Vector2 c, Color color)
+    {
+        var minX = Math.Max(0, (int)MathF.Floor(MathF.Min(a.X, MathF.Min(b.X, c.X))));
+        var maxX = Math.Min(image.GetWidth() - 1, (int)MathF.Ceiling(MathF.Max(a.X, MathF.Max(b.X, c.X))));
+        var minY = Math.Max(0, (int)MathF.Floor(MathF.Min(a.Y, MathF.Min(b.Y, c.Y))));
+        var maxY = Math.Min(image.GetHeight() - 1, (int)MathF.Ceiling(MathF.Max(a.Y, MathF.Max(b.Y, c.Y))));
+
+        var area = Edge(a, b, c);
+        if (MathF.Abs(area) < 0.01f)
+            return;
+
+        for (var y = minY; y <= maxY; y++)
+        {
+            for (var x = minX; x <= maxX; x++)
+            {
+                var p = new Vector2(x + 0.5f, y + 0.5f);
+                var w0 = Edge(b, c, p);
+                var w1 = Edge(c, a, p);
+                var w2 = Edge(a, b, p);
+                if ((w0 >= 0f && w1 >= 0f && w2 >= 0f) || (w0 <= 0f && w1 <= 0f && w2 <= 0f))
+                    image.SetPixel(x, y, color);
+            }
+        }
+    }
+
+    private static float Edge(Vector2 a, Vector2 b, Vector2 c)
+    {
+        return (c.X - a.X) * (b.Y - a.Y) - (c.Y - a.Y) * (b.X - a.X);
+    }
+
+    private static void DrawLine(Image image, Vector2 from, Vector2 to, Color color, int thickness)
+    {
+        var steps = (int)MathF.Max(MathF.Abs(to.X - from.X), MathF.Abs(to.Y - from.Y));
+        if (steps == 0)
+        {
+            StampPixel(image, (int)MathF.Round(from.X), (int)MathF.Round(from.Y), color, thickness);
+            return;
         }
 
-        DrawColoredPolygon(points, color);
-    }
-
-    private static Vector2[] CreateLeafPolygon(Vector2 center, Vector2 radius, float angle, float side)
-    {
-        return new[]
+        for (var step = 0; step <= steps; step++)
         {
-            center + Rotate(new Vector2(0f, -radius.Y), angle),
-            center + Rotate(new Vector2(side * radius.X, -radius.Y * 0.25f), angle),
-            center + Rotate(new Vector2(side * radius.X * 0.55f, radius.Y), angle),
-            center + Rotate(new Vector2(0f, radius.Y * 0.7f), angle),
-            center + Rotate(new Vector2(-side * radius.X * 0.2f, radius.Y * 0.15f), angle)
-        };
+            var t = step / (float)steps;
+            var x = Mathf.Lerp(from.X, to.X, t);
+            var y = Mathf.Lerp(from.Y, to.Y, t);
+            StampPixel(image, (int)MathF.Round(x), (int)MathF.Round(y), color, thickness);
+        }
     }
 
-    private static Vector2 Rotate(Vector2 point, float angle)
+    private static void DrawArc(Image image, Vector2 center, float radius, float startAngle, float endAngle, Color color)
     {
-        var sin = MathF.Sin(angle);
-        var cos = MathF.Cos(angle);
-        return new Vector2(point.X * cos - point.Y * sin, point.X * sin + point.Y * cos);
+        const int steps = 20;
+        Vector2? last = null;
+        for (var index = 0; index <= steps; index++)
+        {
+            var t = index / (float)steps;
+            var angle = Mathf.Lerp(startAngle, endAngle, t);
+            var point = center + new Vector2(MathF.Cos(angle) * radius, MathF.Sin(angle) * radius);
+            if (last.HasValue)
+                DrawLine(image, last.Value, point, color, 1);
+            last = point;
+        }
+    }
+
+    private static void StampPixel(Image image, int x, int y, Color color, int thickness)
+    {
+        for (var offsetY = -thickness; offsetY <= thickness; offsetY++)
+        {
+            for (var offsetX = -thickness; offsetX <= thickness; offsetX++)
+            {
+                var px = x + offsetX;
+                var py = y + offsetY;
+                if (px >= 0 && py >= 0 && px < image.GetWidth() && py < image.GetHeight())
+                    image.SetPixel(px, py, color);
+            }
+        }
     }
 }
 #endif

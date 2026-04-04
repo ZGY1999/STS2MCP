@@ -14,7 +14,7 @@
     Build configuration (default: Release).
 
 .EXAMPLE
-    .\build.ps1 -GameDir "D:\SteamLibrary\steamapps\common\Slay the Spire 2"
+    .\build.ps1 -GameDir "C:\Path\To\Slay the Spire 2"
     .\build.ps1  # uses $env:STS2_GAME_DIR
 #>
 param(
@@ -34,10 +34,10 @@ if (-not $GameDir) {
 ERROR: Game directory not specified.
 
 Provide it via parameter or environment variable:
-  .\build.ps1 -GameDir "D:\SteamLibrary\steamapps\common\Slay the Spire 2"
+  .\build.ps1 -GameDir "C:\Path\To\Slay the Spire 2"
 
 Or set it once in your PowerShell profile:
-  `$env:STS2_GAME_DIR = "D:\SteamLibrary\steamapps\common\Slay the Spire 2"
+  `$env:STS2_GAME_DIR = "C:\Path\To\Slay the Spire 2"
 "@ -ForegroundColor Red
     exit 1
 }
@@ -64,6 +64,8 @@ Install the .NET 9 SDK from:
 $scriptDir = $PSScriptRoot
 $project = Join-Path $scriptDir "STS2_MCP.csproj"
 $outDir = Join-Path (Join-Path $scriptDir "out") "STS2_MCP"
+$assetSourceDir = Join-Path $scriptDir "assets"
+$assetOutDir = Join-Path $outDir "STS2_MCP.assets"
 
 Write-Host "=== Building STS2_MCP ($Configuration) ===" -ForegroundColor Cyan
 Write-Host "Game directory : $GameDir"
@@ -73,8 +75,19 @@ Write-Host ""
 dotnet build $project -c $Configuration -o $outDir -p:STS2GameDir="$GameDir"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+if (Test-Path $assetSourceDir) {
+    if (Test-Path $assetOutDir) {
+        Remove-Item $assetOutDir -Recurse -Force
+    }
+
+    Copy-Item $assetSourceDir $assetOutDir -Recurse -Force
+}
+
 Write-Host ""
 Write-Host "=== Build succeeded ===" -ForegroundColor Green
 Write-Host "To install, copy these files to <game_install>/mods/:"
 Write-Host "  $outDir\STS2_MCP.dll"
 Write-Host "  $scriptDir\mod_manifest.json  ->  mods\STS2_MCP.json"
+if (Test-Path $assetOutDir) {
+    Write-Host "  $assetOutDir  ->  mods\STS2_MCP.assets"
+}

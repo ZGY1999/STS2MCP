@@ -16,6 +16,9 @@ orchestrator/sts2_pet.toml
 .mcp.json
 CLAUDE.md
 GUIDE.md
+AGENTS.md
+docs/superpowers/
+.local-archive/
 
 # Qoder
 .qoder.json

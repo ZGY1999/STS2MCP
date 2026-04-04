@@ -1,94 +1,140 @@
 <p align="center">
-  <img src="docs/teaser.png" alt="STS2 MCP" width="90%" />
+  <img src="docs/teaser.png" alt="STS2 Pet Companion" width="90%" />
 </p>
 
-<p align="center"><em>An Experimental Research Project to Fully-Automate your Slay the Spire 2 Runs</em></p>
+<p align="center"><em>Pet companion, advice mode, and auto-play tooling for Slay the Spire 2.</em></p>
 
 <p align="center">
-  <a href="./README.zh-CN.md">中文说明</a>
+  <a href="./README.zh-CN.md">简体中文</a>
 </p>
 
-A mod for [**Slay the Spire 2**](https://store.steampowered.com/app/2868840/Slay_the_Spire_2/) that lets AI agents play the game. Exposes game state and actions via a localhost REST API, with an optional MCP server for Claude Desktop / Claude Code integration.
+STS2 Pet Companion is a mod for [Slay the Spire 2](https://store.steampowered.com/app/2868840/Slay_the_Spire_2/) that exposes game state over localhost, lets external tools take actions, and adds an in-game pet overlay for `pause`, `advise`, and `auto` modes.
 
-中文简介：
-这是一个面向 Slay the Spire 2 的 AI 陪玩与自动化实验项目。它基于原始项目 [Gennadiyev/STS2MCP](https://github.com/Gennadiyev/STS2MCP) 继续开发，在保留基础 MCP bridge 与本地 REST API 的同时，扩展了宠物伴侣界面、建议模式、自动模式，以及用于状态轮询和动作执行的 Python orchestrator。
-
-Singleplayer and multiplayer (co-op) supported. Tested against STS2 `v0.99.1`.
-
-The Python orchestrator lives in [`orchestrator/src/sts2_pet`](./orchestrator/src/sts2_pet) and is used for pet bridge control, mode polling, advice generation, and auto-play loops.
-
-This repository is a fork of the original [Gennadiyev/STS2MCP](https://github.com/Gennadiyev/STS2MCP). The base MCP bridge and API design come from the original project; this fork extends it with the pet companion overlay, Python orchestrator, and auto-play workflow.
+This repository is a fork of [Gennadiyev/STS2MCP](https://github.com/Gennadiyev/STS2MCP). It keeps the original MCP bridge idea and extends it with the pet companion UI, a Python orchestrator, and auto-play workflows.
 
 > [!warning]
-> This mod allows external programs to read and control your game via a localhost API. Use at your own risk with runs you care less about.
+> This mod lets external programs read and control your game through a localhost API. Use it on runs you are comfortable experimenting with.
 
 > [!caution]
-> Multiplayer support is in **beta** — expect bugs. Any multiplayer issues encountered with this mod installed are very likely caused by the mod, not the game. Please disable the mod and verify the issue persists before reporting bugs to the STS2 developers.
+> Multiplayer support is beta. If you hit a multiplayer issue, disable the mod first and confirm the issue still happens before reporting it as a game bug.
 
-## For Players
+## What You Get
 
-### Install
+- Local HTTP API for reading game state and sending actions
+- In-game pet companion overlay with visible mode and message bubbles
+- `pause`, `advise`, and `auto` companion modes
+- Optional MCP server for Claude Desktop / Claude Code
+- Python orchestrator for polling state, generating advice, and executing actions
 
-Grab the [latest release](https://github.com/Gennadiyev/STS2_MCP/releases/latest) and follow the instructions:
+## Quick Start
 
-1. Copy `STS2_MCP.dll` and `STS2_MCP.json` to `<game_install>/mods/`
-2. Launch the game and enable mods in settings (a consent dialog appears on first launch)
-3. The mod starts an HTTP server on `localhost:15526` automatically
+### 1. Build the mod
 
-### Connect to Claude
+Prerequisites:
 
-Requires [Python 3.11+](https://www.python.org/) and [uv](https://docs.astral.sh/uv/).
+- Windows
+- Slay the Spire 2
+- [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
 
-**Clone or download the repository**, then:
+Clone the repository, then build the DLL:
 
-**Claude Code** — add to your project's `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "sts2": {
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/STS2_MCP/mcp", "python", "server.py"]
-    }
-  }
-}
+```powershell
+git clone https://github.com/ZGY1999/STS2-Pet-Companion.git
+cd .\STS2-Pet-Companion
+.\build.ps1 -GameDir "<Your Slay the Spire 2 install folder>"
 ```
 
-**Claude Desktop** — add to `claude_desktop_config.json` with the same config as above.
+You can also set the game path once for the current shell:
 
-The MCP server accepts `--host` and `--port` flags if you need non-default settings.
+```powershell
+$env:STS2_GAME_DIR = "<Your Slay the Spire 2 install folder>"
+.\build.ps1
+```
 
-Full tool reference: [mcp/README.md](./mcp/README.md) | Raw HTTP API: [docs/raw_api.md](./docs/raw_api.md)
+The build output will be placed in:
 
-### Orchestrator
+```text
+out/STS2_MCP/STS2_MCP.dll
+mod_manifest.json
+out/STS2_MCP/STS2_MCP.assets  (if assets are present)
+```
 
-The orchestrator is a small Python CLI that reads the game state, syncs the pet bridge, and stays attached by default.
+### 2. Install the mod into the game
 
-Pet bridge endpoints:
+Copy these files into `<game_install>/mods/`:
 
+```text
+out/STS2_MCP/STS2_MCP.dll            -> <game_install>/mods/STS2_MCP.dll
+mod_manifest.json                    -> <game_install>/mods/STS2_MCP.json
+out/STS2_MCP/STS2_MCP.assets         -> <game_install>/mods/STS2_MCP.assets
+```
+
+### 3. Launch and verify
+
+1. Start the game.
+2. Enable the mod if the game asks for consent on first launch.
+3. Start or load a run.
+4. Confirm the local API is live at `http://127.0.0.1:15526/`.
+
+If the mod is loaded correctly, the game should expose:
+
+- `GET /api/v1/singleplayer`
 - `GET /api/v1/pet/status`
 - `POST /api/v1/pet/mode`
 - `POST /api/v1/pet/message`
 
-Mode semantics:
+## Running the Pet Companion
 
-- `pause` means do not poll and do not call the provider.
-- `advise` means read state, ask the provider for advice, and push a full pet bubble when advice is needed.
-- `auto` means read state, ask the provider for one action plan, push narration, and execute one action.
+The pet companion has three modes:
 
-Create a local config first:
+- `pause`: do not poll game state and do not call a model
+- `advise`: read state and show advice in the pet bubble
+- `auto`: read state, plan one action, narrate it, then execute it
+
+### Fastest smoke test
+
+If you only want to verify the pipeline works, use the deterministic provider first. It does not need an API key.
+
+```powershell
+cd .\orchestrator
+Copy-Item .\sts2_pet.toml.example .\sts2_pet.toml
+python -m pip install -e .
+python -m sts2_pet.cli --mode advise
+```
+
+### Config file
+
+The orchestrator reads config in this order:
+
+- built-in defaults
+- `sts2_pet.toml`
+- environment variables
+- CLI flags
+
+Start by copying the example file:
 
 ```powershell
 cd .\orchestrator
 Copy-Item .\sts2_pet.toml.example .\sts2_pet.toml
 ```
 
-Example `sts2_pet.toml` for an OpenAI-compatible gateway:
+Minimal deterministic config:
+
+```toml
+provider_name = "deterministic"
+poll_interval_seconds = 0.75
+timeout_seconds = 90
+
+game_base_url = "http://127.0.0.1:15526"
+pet_base_url = "http://127.0.0.1:15526"
+```
+
+Example OpenAI-compatible config:
 
 ```toml
 provider_name = "openai_compatible"
 poll_interval_seconds = 0.75
-timeout_seconds = 15
+timeout_seconds = 90
 
 game_base_url = "http://127.0.0.1:15526"
 pet_base_url = "http://127.0.0.1:15526"
@@ -99,18 +145,19 @@ base_url = "https://your-gateway.example/v1"
 model = "gpt-4.1-mini"
 ```
 
-Example `sts2_pet.toml` for local Codex:
+Example local Codex CLI config:
 
 ```toml
 provider_name = "codex_cli"
 poll_interval_seconds = 0.75
+timeout_seconds = 90
 
 [provider]
 codex_cmd = "codex.cmd"
 codex_model = "gpt-5-codex"
 ```
 
-Startup and smoke examples:
+### Start commands
 
 ```powershell
 cd .\orchestrator
@@ -120,63 +167,66 @@ python -m sts2_pet.cli --mode auto
 python -m sts2_pet.cli --mode advise --once
 ```
 
-Config precedence is:
+Shortcut scripts are also included:
 
-- built-in defaults
-- `sts2_pet.toml`
-- environment variables
-- CLI flags
+- `orchestrator/start-pet-advise.cmd`
+- `orchestrator/start-pet-auto.cmd`
 
-Supported provider modes:
+## Optional MCP Server
 
-- `deterministic`
-- `openai_compatible`
-- `gateway`
-- `codex_cli`
+If you want to connect the game to Claude via MCP, use the server in [`mcp/`](./mcp).
 
-Development verification already achieved:
+Requirements:
 
-- Targeted orchestrator tests passed in development for `test_policy.py`, `test_clients.py`, and `test_runner_modes.py`.
+- [Python 3.11+](https://www.python.org/)
+- [uv](https://docs.astral.sh/uv/)
 
-Manual validation after installing the new DLL and restarting the game:
+Example MCP config:
 
-- Confirm `GET /api/v1/singleplayer?format=json` returns the active run state.
-- Confirm `GET /api/v1/pet/status` returns the bridge status from the new build.
-- Run the smoke commands above and verify the pet bridge updates without disturbing the live run.
+```json
+{
+  "mcpServers": {
+    "sts2": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/STS2-Pet-Companion/mcp", "python", "server.py"]
+    }
+  }
+}
+```
 
-## For Developers
+Useful docs:
 
-### Build & Install
+- [MCP tool reference](./mcp/README.md)
+- [Simplified raw state examples](./docs/raw-simplified.md)
+- [Full raw state examples](./docs/raw-full.md)
 
-Requires [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0).
+## Development
 
-**PowerShell** (recommended):
+### Build
 
 ```powershell
-# Pass game path directly:
-.\build.ps1 -GameDir "D:\SteamLibrary\steamapps\common\Slay the Spire 2"
-
-# Or set it once and forget:
-$env:STS2_GAME_DIR = "D:\SteamLibrary\steamapps\common\Slay the Spire 2"
-.\build.ps1
+.\build.ps1 -GameDir "<Your Slay the Spire 2 install folder>"
 ```
 
-The script builds `STS2_MCP.dll` into `out/STS2_MCP/`. Copy it along with the manifest JSON to `<game_install>/mods/` to install:
+### C# tests
 
+```powershell
+dotnet test .\tests\STS2_MCP.Tests\STS2_MCP.Tests.csproj
 ```
-out/STS2_MCP/STS2_MCP.dll           ->  <game_install>/mods/STS2_MCP.dll
-mod_manifest.json                   ->  <game_install>/mods/STS2_MCP.json
+
+### Python tests
+
+```powershell
+python -m pytest .\orchestrator\tests -q
 ```
 
-### Features
+## Notes for Contributors
 
-**Singleplayer** — full coverage of all game screens:
-
-Combat (play cards, use potions, end turn, in-combat card selection), rewards (claim, pick/skip cards), map navigation (full DAG with lookahead), rest sites, shop, events & ancients, card selection overlays (transform, upgrade, remove), relic selection, treasure rooms, keyword glossary across all entities.
-
-**Multiplayer (beta)** — all singleplayer features plus:
-
-End-turn voting (submit/undo), map node voting, shared event voting, treasure relic bidding, all-players state summary, per-player ready/vote tracking. Endpoints are mutually guarded (singleplayer endpoint rejects multiplayer runs and vice versa).
+- The player-facing entry point is this README.
+- MCP tools live in [`mcp/server.py`](./mcp/server.py).
+- The pet companion orchestrator lives in [`orchestrator/src/sts2_pet`](./orchestrator/src/sts2_pet).
+- C# tests live in [`tests/STS2_MCP.Tests`](./tests/STS2_MCP.Tests).
+- Python tests live in [`orchestrator/tests`](./orchestrator/tests).
 
 ## License
 
@@ -185,35 +235,4 @@ MIT
 ## Credits
 
 - Original project: [Gennadiyev/STS2MCP](https://github.com/Gennadiyev/STS2MCP)
-- This fork builds on the original MCP bridge and keeps the upstream MIT license in place
-
-## FAQ
-
-### Why let the AI play the game for me?
-
-I start building this mod with the hope that I can co-op with an AI player. Singleplayer is originally just built for validation.
-
-### You did not answer the question!
-
-First of all, I play lots of games, including service games that has daily/weekly tasks. I really hoped that modern AI could save me from the grind, which, if you have tried one or more of the GUI agents, never really materialized. Let's face it: modern AI is still pretty bad at gaming because no one cares.
-
-About my intention, as a researcher that loves playing games, the purpose of STS2MCP is to test AI models and agents in a rarely explored (we call it out-of-distribution) domain. Ultimately, this might turn into a benchmark for evaluating the reasoning and decision-making capabilities of different language models.
-
-STS2 is just an example to show how good (or bad) current AI agents are at playing such games. **I have no intention to replace human players with AI, and I would definitely rather play STS2 myself** as a big fan of the game.
-
-### Is this a cheat mod?
-
-It can be, but it doesn't have to be. The mod itself does not alter the gameplay. It is just an interface that allows external programs to interact with the game. What you do with that interface is up to you.
-
-### How many tokens do a run consume?
-
-I evaluated on the Ironclad. Claude Sonnet 4.6 uses slightly more than 8M tokens (counting both input, output and tool responses) for a full run. GPT-5.4 averages 7.34M tokens. Depending on your prompt and model choice, it can be more or less.
-
-### Do you have a roadmap for future features?
-
-The project is still too early to have a clear roadmap. My current focus is to make sure the core features are stable and well-documented. However, I am open to suggestions and contributions from the community.
-
-- Solidifying multiplayer features and fixing bugs is a priority
-- Add support for in-game communication in multiplayer runs when collaborating with an AI agent
-- Self-reflection and learning from past runs to improve future performance
-- Benchmarking different models and agents is also on my mind
+- This fork extends the original bridge with the pet companion overlay and orchestrator workflow
