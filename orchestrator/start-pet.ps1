@@ -7,7 +7,24 @@ param(
 $ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$python = "C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe"
+$python = $env:STS2_PET_PYTHON
+$pythonArgs = @()
+if (-not $python) {
+    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($pythonCmd) {
+        $python = $pythonCmd.Source
+    }
+}
+if (-not $python) {
+    $pyLauncher = Get-Command py -ErrorAction SilentlyContinue
+    if ($pyLauncher) {
+        $python = $pyLauncher.Source
+        $pythonArgs += "-3"
+    }
+}
+if (-not $python) {
+    throw "Python executable not found. Set STS2_PET_PYTHON or install python/py."
+}
 $healthUrl = "http://127.0.0.1:15526/api/v1/pet/status"
 $outLog = Join-Path $env:USERPROFILE "sts2-pet-orchestrator.out.log"
 $errLog = Join-Path $env:USERPROFILE "sts2-pet-orchestrator.err.log"
@@ -38,7 +55,7 @@ if (Test-Path -LiteralPath $errLog) { Remove-Item -LiteralPath $errLog -Force }
 $process = Start-Process `
     -FilePath $python `
     -WorkingDirectory $scriptDir `
-    -ArgumentList "-m", "sts2_pet.cli", "--mode", $Mode `
+    -ArgumentList ($pythonArgs + @("-m", "sts2_pet.cli", "--mode", $Mode)) `
     -RedirectStandardOutput $outLog `
     -RedirectStandardError $errLog `
     -PassThru

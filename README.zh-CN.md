@@ -110,7 +110,7 @@ Copy-Item .\sts2_pet.toml.example .\sts2_pet.toml
 然后安装：
 
 ```powershell
-C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m pip install -e .
+python -m pip install -e .
 ```
 
 #### OpenAI 兼容网关示例
@@ -157,9 +157,9 @@ claude_model = "claude-sonnet-4-6"
 
 ```powershell
 cd .\orchestrator
-C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m sts2_pet.cli --mode advise
-C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m sts2_pet.cli --mode auto
-C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m sts2_pet.cli --mode advise --once
+python -m sts2_pet.cli --mode advise
+python -m sts2_pet.cli --mode auto
+python -m sts2_pet.cli --mode advise --once
 ```
 
 项目里也提供了快捷脚本：
@@ -184,7 +184,7 @@ dotnet test .\tests\STS2_MCP.Tests\STS2_MCP.Tests.csproj
 ### Python 测试
 
 ```powershell
-C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m pytest .\orchestrator\tests -q
+python -m pytest .\orchestrator\tests -q
 ```
 
 ## 许可证与致谢

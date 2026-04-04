@@ -12,7 +12,7 @@ mcp/.venv/
 orchestrator/sts2_pet.toml
 
 # Claude Code
-# .claude/
+.claude/
 .mcp.json
 CLAUDE.md
 GUIDE.md

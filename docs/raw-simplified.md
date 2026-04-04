@@ -171,9 +171,9 @@ All POST requests use JSON body with `"action"` field. All responses include `{ 
 After installing the new DLL and restarting the game, run the orchestrator CLI from `orchestrator/`:
 
 ```powershell
-C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m pip install -e .
-C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m sts2_pet.cli --mode advise
-C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m sts2_pet.cli --mode auto
+python -m pip install -e .
+python -m sts2_pet.cli --mode advise
+python -m sts2_pet.cli --mode auto
 ```
 
 Development verification already achieved:

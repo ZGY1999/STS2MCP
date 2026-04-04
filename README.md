@@ -111,10 +111,10 @@ Startup and smoke examples:
 
 ```powershell
 cd .\orchestrator
-C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m pip install -e .
-C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m sts2_pet.cli --mode advise
-C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m sts2_pet.cli --mode auto
-C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m sts2_pet.cli --mode advise --once
+python -m pip install -e .
+python -m sts2_pet.cli --mode advise
+python -m sts2_pet.cli --mode auto
+python -m sts2_pet.cli --mode advise --once
 ```
 
 Config precedence is:
