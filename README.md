@@ -10,6 +10,9 @@
 
 A mod for [**Slay the Spire 2**](https://store.steampowered.com/app/2868840/Slay_the_Spire_2/) that lets AI agents play the game. Exposes game state and actions via a localhost REST API, with an optional MCP server for Claude Desktop / Claude Code integration.
 
+中文简介：
+这是一个面向 Slay the Spire 2 的 AI 陪玩与自动化实验项目。它基于原始项目 [Gennadiyev/STS2MCP](https://github.com/Gennadiyev/STS2MCP) 继续开发，在保留基础 MCP bridge 与本地 REST API 的同时，扩展了宠物伴侣界面、建议模式、自动模式，以及用于状态轮询和动作执行的 Python orchestrator。
+
 Singleplayer and multiplayer (co-op) supported. Tested against STS2 `v0.99.1`.
 
 The Python orchestrator lives in [`orchestrator/src/sts2_pet`](./orchestrator/src/sts2_pet) and is used for pet bridge control, mode polling, advice generation, and auto-play loops.
