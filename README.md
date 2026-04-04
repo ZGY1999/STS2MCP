@@ -8,6 +8,8 @@ A mod for [**Slay the Spire 2**](https://store.steampowered.com/app/2868840/Slay
 
 Singleplayer and multiplayer (co-op) supported. Tested against STS2 `v0.99.1`.
 
+The Python orchestrator lives in [`orchestrator/src/sts2_pet`](./orchestrator/src/sts2_pet) and is used for pet bridge control, mode polling, advice generation, and auto-play loops.
+
 > [!warning]
 > This mod allows external programs to read and control your game via a localhost API. Use at your own risk with runs you care less about.
 
@@ -48,6 +50,90 @@ Requires [Python 3.11+](https://www.python.org/) and [uv](https://docs.astral.sh
 The MCP server accepts `--host` and `--port` flags if you need non-default settings.
 
 Full tool reference: [mcp/README.md](./mcp/README.md) | Raw HTTP API: [docs/raw_api.md](./docs/raw_api.md)
+
+### Orchestrator
+
+The orchestrator is a small Python CLI that reads the game state, syncs the pet bridge, and stays attached by default.
+
+Pet bridge endpoints:
+
+- `GET /api/v1/pet/status`
+- `POST /api/v1/pet/mode`
+- `POST /api/v1/pet/message`
+
+Mode semantics:
+
+- `pause` means do not poll and do not call the provider.
+- `advise` means read state, ask the provider for advice, and push a full pet bubble when advice is needed.
+- `auto` means read state, ask the provider for one action plan, push narration, and execute one action.
+
+Create a local config first:
+
+```powershell
+cd .\orchestrator
+Copy-Item .\sts2_pet.toml.example .\sts2_pet.toml
+```
+
+Example `sts2_pet.toml` for an OpenAI-compatible gateway:
+
+```toml
+provider_name = "openai_compatible"
+poll_interval_seconds = 0.75
+timeout_seconds = 15
+
+game_base_url = "http://127.0.0.1:15526"
+pet_base_url = "http://127.0.0.1:15526"
+
+[provider]
+api_key = "your-key"
+base_url = "https://your-gateway.example/v1"
+model = "gpt-4.1-mini"
+```
+
+Example `sts2_pet.toml` for local Codex:
+
+```toml
+provider_name = "codex_cli"
+poll_interval_seconds = 0.75
+
+[provider]
+codex_cmd = "codex.cmd"
+codex_model = "gpt-5-codex"
+```
+
+Startup and smoke examples:
+
+```powershell
+cd .\orchestrator
+C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m pip install -e .
+C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m sts2_pet.cli --mode advise
+C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m sts2_pet.cli --mode auto
+C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m sts2_pet.cli --mode advise --once
+```
+
+Config precedence is:
+
+- built-in defaults
+- `sts2_pet.toml`
+- environment variables
+- CLI flags
+
+Supported provider modes:
+
+- `deterministic`
+- `openai_compatible`
+- `gateway`
+- `codex_cli`
+
+Development verification already achieved:
+
+- Targeted orchestrator tests passed in development for `test_policy.py`, `test_clients.py`, and `test_runner_modes.py`.
+
+Manual validation after installing the new DLL and restarting the game:
+
+- Confirm `GET /api/v1/singleplayer?format=json` returns the active run state.
+- Confirm `GET /api/v1/pet/status` returns the bridge status from the new build.
+- Run the smoke commands above and verify the pet bridge updates without disturbing the live run.
 
 ## For Developers
 

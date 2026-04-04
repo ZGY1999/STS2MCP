@@ -2,12 +2,28 @@
 
 HTTP API on `localhost:15526`. No authentication.
 
+The orchestrator companion lives in `orchestrator/src/sts2_pet` and drives the pet bridge and one-step mode loop.
+
+## Pet Bridge
+
+- `GET /api/v1/pet/status` - read pet bridge status
+- `POST /api/v1/pet/mode` - set the bridge mode
+- `POST /api/v1/pet/message` - publish a pet message bubble
+
+Mode semantics:
+
+- `pause` - no polling, no provider calls
+- `advise` - read state, call the provider, and publish advice when needed
+- `auto` - read state, build one action plan, publish narration, and execute one action
+
 - `GET /api/v1/singleplayer` — read game state
 - `POST /api/v1/singleplayer` — perform action
 - `GET /api/v1/multiplayer` — read multiplayer state
 - `POST /api/v1/multiplayer` — perform multiplayer action
 
 Singleplayer and multiplayer endpoints are mutually exclusive (HTTP 409 if mismatched).
+
+The orchestrator uses `GET /api/v1/singleplayer?format=json` for its state reads and the pet bridge endpoints above for mode and narration sync.
 
 ## GET — Query Parameters
 
@@ -149,3 +165,23 @@ All POST requests use JSON body with `"action"` field. All responses include `{ 
 |---|---|---|
 | `end_turn` | _(none)_ | Vote to end turn. Turn ends when all players vote. |
 | `undo_end_turn` | _(none)_ | Retract end-turn vote (before all players committed). |
+
+## Orchestrator Smoke
+
+After installing the new DLL and restarting the game, run the orchestrator CLI from `orchestrator/`:
+
+```powershell
+C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m pip install -e .
+C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m sts2_pet.cli --mode advise
+C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m sts2_pet.cli --mode auto
+```
+
+Development verification already achieved:
+
+- Targeted Python tests for policy, client contracts, and runner mode behavior passed during development.
+
+Manual validation still required after install:
+
+- Confirm the live game returns `state_type` from `GET /api/v1/singleplayer?format=json`.
+- Confirm the newly installed build exposes `GET /api/v1/pet/status`.
+- Confirm `--mode advise` and `--mode auto` update the pet bridge without interrupting the active run.

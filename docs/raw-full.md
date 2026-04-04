@@ -10,6 +10,24 @@ HTTP API served by the STS2_MCP mod on `localhost:15526`. No authentication. Loc
 
 The endpoints are mutually exclusive: calling singleplayer during a multiplayer run (or vice versa) returns HTTP 409.
 
+The orchestrator companion lives in `orchestrator/src/sts2_pet`. It reads game state, synchronizes the pet bridge, and runs a single step per invocation.
+
+## Pet Bridge
+
+```text
+GET  /api/v1/pet/status   read bridge status
+POST /api/v1/pet/mode     set the bridge mode
+POST /api/v1/pet/message  publish a pet message bubble
+```
+
+Mode semantics:
+
+- `pause` - no polling, no provider calls
+- `advise` - read state, call the provider, and publish advice when the policy says advice is needed
+- `auto` - read state, build one action plan, publish narration, and execute one action
+
+The orchestrator reads `GET /api/v1/singleplayer?format=json` for its game snapshot and uses the pet bridge endpoints above for mode and bubble sync.
+
 ---
 
 ## GET — Read Game State
@@ -1090,3 +1108,23 @@ In multiplayer, this is a vote. The turn ends only when all players submit.
 Retract the end-turn vote before all players have committed.
 
 All other actions work identically to singleplayer.
+
+## Orchestrator Smoke
+
+After installing the new DLL and restarting the game, run the orchestrator CLI from `orchestrator/`:
+
+```powershell
+C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m pip install -e .
+C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m sts2_pet.cli --mode advise
+C:\Users\colezhang\AppData\Local\Programs\Python\Python312\python.exe -m sts2_pet.cli --mode auto
+```
+
+Development verification already achieved:
+
+- Targeted Python tests for policy, client contracts, and runner mode behavior passed during development.
+
+Manual validation still required after install:
+
+- Confirm the live game returns an active run from `GET /api/v1/singleplayer?format=json`.
+- Confirm the installed build exposes `GET /api/v1/pet/status`.
+- Confirm the smoke commands update the pet bridge without disturbing the running game.
