@@ -10,6 +10,8 @@ Singleplayer and multiplayer (co-op) supported. Tested against STS2 `v0.99.1`.
 
 The Python orchestrator lives in [`orchestrator/src/sts2_pet`](./orchestrator/src/sts2_pet) and is used for pet bridge control, mode polling, advice generation, and auto-play loops.
 
+This repository is a fork of the original [Gennadiyev/STS2MCP](https://github.com/Gennadiyev/STS2MCP). The base MCP bridge and API design come from the original project; this fork extends it with the pet companion overlay, Python orchestrator, and auto-play workflow.
+
 > [!warning]
 > This mod allows external programs to read and control your game via a localhost API. Use at your own risk with runs you care less about.
 
@@ -172,6 +174,11 @@ End-turn voting (submit/undo), map node voting, shared event voting, treasure re
 ## License
 
 MIT
+
+## Credits
+
+- Original project: [Gennadiyev/STS2MCP](https://github.com/Gennadiyev/STS2MCP)
+- This fork builds on the original MCP bridge and keeps the upstream MIT license in place
 
 ## FAQ
 
