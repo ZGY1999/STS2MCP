@@ -32,7 +32,7 @@ public class PetOverlayViewModelTests
     }
 
     [Fact]
-    public void FromSnapshot_Builds_BadgeBubbleAndMenuState()
+    public void FromSnapshot_Builds_BubbleAndMenuState_WithoutBadgeText()
     {
         var viewModel = PetOverlayViewModel.FromSnapshot(new PetStateSnapshot(
             PetMode.Auto,
@@ -41,7 +41,6 @@ public class PetOverlayViewModelTests
             new[] { "Plan first", "Then act" },
             true));
 
-        Assert.Equal("AUTO", viewModel.ModeBadgeText);
         Assert.Equal("Pet", viewModel.BubbleTitle);
         Assert.Equal("Plan first\nThen act", viewModel.BubbleText);
         Assert.True(viewModel.ShowBubble);
@@ -50,6 +49,59 @@ public class PetOverlayViewModelTests
         Assert.Equal("Pause", viewModel.MenuItems[0].Label);
         Assert.False(viewModel.MenuItems[0].IsSelected);
         Assert.True(viewModel.MenuItems[2].IsSelected);
+    }
+
+    [Fact]
+    public void PetOverlayViewModel_NoLongerExposes_PersistentModeBadgeText()
+    {
+        Assert.Null(typeof(PetOverlayViewModel).GetProperty("ModeBadgeText"));
+    }
+
+    [Theory]
+    [InlineData(PetMode.Pause, true, false, false)]
+    [InlineData(PetMode.Advise, false, true, false)]
+    [InlineData(PetMode.Auto, false, false, true)]
+    public void FromSnapshot_Preserves_SelectedMenuItem_ForActiveMode(
+        PetMode mode,
+        bool pauseSelected,
+        bool adviseSelected,
+        bool autoSelected)
+    {
+        var viewModel = PetOverlayViewModel.FromSnapshot(new PetStateSnapshot(
+            mode,
+            PetVisualState.Idle,
+            string.Empty,
+            System.Array.Empty<string>(),
+            false));
+
+        Assert.Equal(pauseSelected, viewModel.MenuItems[0].IsSelected);
+        Assert.Equal(adviseSelected, viewModel.MenuItems[1].IsSelected);
+        Assert.Equal(autoSelected, viewModel.MenuItems[2].IsSelected);
+    }
+
+    [Theory]
+    [InlineData(PetMode.Pause)]
+    [InlineData(PetMode.Advise)]
+    [InlineData(PetMode.Auto)]
+    public void PetModeAccentSpec_UsesSoftEllipticalGroundGlow_AndSubtleOutline(PetMode mode)
+    {
+        var spec = CreateAccentSpec(mode);
+
+        Assert.True(ReadSingle(spec, "HaloWidth") >= 52f);
+        Assert.True(ReadSingle(spec, "HaloWidth") > ReadSingle(spec, "HaloHeight") * 8f);
+        Assert.True(ReadSingle(spec, "HaloAlpha") <= 0.09f);
+        Assert.True(ReadSingle(spec, "OutlineAlpha") <= 0.28f);
+        Assert.Equal(0, ReadInt32(spec, "OutlineBottomWidth"));
+    }
+
+    [Fact]
+    public void PetModeAccentSpec_KeepsAutoMostReadable_AndPauseMostQuiet()
+    {
+        var pause = CreateAccentSpec(PetMode.Pause);
+        var auto = CreateAccentSpec(PetMode.Auto);
+
+        Assert.True(ReadSingle(auto, "OutlineAlpha") > ReadSingle(pause, "OutlineAlpha"));
+        Assert.True(ReadSingle(auto, "HaloShadowAlpha") > ReadSingle(pause, "HaloShadowAlpha"));
     }
 
     [Fact]
@@ -217,6 +269,19 @@ public class PetOverlayViewModelTests
         Assert.NotNull(factory);
 
         var result = factory!.Invoke(null, new object[] { state });
+        Assert.NotNull(result);
+        return result!;
+    }
+
+    private static object CreateAccentSpec(PetMode mode)
+    {
+        var type = typeof(PetOverlayViewModel).Assembly.GetType("STS2_MCP.PetModeAccentSpec");
+        Assert.NotNull(type);
+
+        var factory = type!.GetMethod("FromMode", BindingFlags.Public | BindingFlags.Static);
+        Assert.NotNull(factory);
+
+        var result = factory!.Invoke(null, new object[] { mode });
         Assert.NotNull(result);
         return result!;
     }

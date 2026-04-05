@@ -28,7 +28,7 @@ This repository is a fork of [Gennadiyev/STS2MCP](https://github.com/Gennadiyev/
 
 ## Quick Start
 
-### 1. Build the mod
+### 1. Build and install the mod
 
 Prerequisites:
 
@@ -36,22 +36,36 @@ Prerequisites:
 - Slay the Spire 2
 - [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
 
-Clone the repository, then build the DLL:
+Clone the repository, then build and install the mod in one step:
 
 ```powershell
 git clone https://github.com/ZGY1999/STS2-Pet-Companion.git
 cd .\STS2-Pet-Companion
-.\build.ps1 -GameDir "<Your Slay the Spire 2 install folder>"
+.\install.cmd -GameDir "<Your Slay the Spire 2 install folder>" -NoPause
+```
+
+If you want to keep existing mod files before overwriting them:
+
+```powershell
+.\install.cmd -GameDir "<Your Slay the Spire 2 install folder>" -BackupExisting -NoPause
 ```
 
 You can also set the game path once for the current shell:
 
 ```powershell
 $env:STS2_GAME_DIR = "<Your Slay the Spire 2 install folder>"
-.\build.ps1
+.\install.cmd -NoPause
 ```
 
-The build output will be placed in:
+If you prefer, you can also double-click `install.cmd`. It will prompt for the game directory and keep the window open when it finishes.
+
+If you only want to compile without installing, keep using:
+
+```powershell
+.\build.ps1 -GameDir "<Your Slay the Spire 2 install folder>"
+```
+
+The build output is placed in:
 
 ```text
 out/STS2_MCP/STS2_MCP.dll
@@ -59,7 +73,7 @@ mod_manifest.json
 out/STS2_MCP/STS2_MCP.assets  (if assets are present)
 ```
 
-### 2. Install the mod into the game
+### 2. Manual install, if needed
 
 Copy these files into `<game_install>/mods/`:
 
@@ -206,6 +220,12 @@ Useful docs:
 
 ```powershell
 .\build.ps1 -GameDir "<Your Slay the Spire 2 install folder>"
+```
+
+### Build and install
+
+```powershell
+.\install.cmd -GameDir "<Your Slay the Spire 2 install folder>" -NoPause
 ```
 
 ### C# tests
