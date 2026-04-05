@@ -19,11 +19,15 @@ namespace STS2_MCP;
 [ModInitializer("Initialize")]
 public static partial class McpMod
 {
-    public const string Version = "0.3.1";
+    public const string Version = "0.3.2";
 
     private static HttpListener? _listener;
     private static Thread? _serverThread;
     private static readonly ConcurrentQueue<Action> _mainThreadQueue = new();
+    private static readonly PetStateStore _petStateStore = new();
+    private static readonly PetBridgeService _petBridgeService = new(_petStateStore);
+    private static SceneTree? _sceneTree;
+    private static PetOverlayController? _petOverlay;
     internal static readonly JsonSerializerOptions _jsonOptions = new()
     {
         WriteIndented = true,
@@ -41,6 +45,8 @@ public static partial class McpMod
 
             // Connect to main thread process frame for action execution
             var tree = (SceneTree)Engine.GetMainLoop();
+            _sceneTree = tree;
+            _petOverlay = new PetOverlayController(_petStateStore);
             tree.Connect(SceneTree.SignalName.ProcessFrame, Callable.From(ProcessMainThreadQueue));
 
             _listener = new HttpListener();
@@ -72,6 +78,8 @@ public static partial class McpMod
             catch (Exception ex) { GD.PrintErr($"[STS2 MCP] Main thread action error: {ex}"); }
             processed++;
         }
+
+        TryRefreshPetOverlay();
     }
 
     internal static Task<T> RunOnMainThread<T>(Func<T> func)
@@ -111,6 +119,22 @@ public static partial class McpMod
         }
     }
 
+    private static void TryRefreshPetOverlay()
+    {
+        if (_sceneTree == null || _petOverlay == null)
+            return;
+
+        try
+        {
+            _petOverlay.EnsureAttached(_sceneTree);
+            _petOverlay.Refresh();
+        }
+        catch (Exception ex)
+        {
+            GD.PrintErr($"[STS2 MCP] Pet overlay error: {ex}");
+        }
+    }
+
     private static void HandleRequest(HttpListenerContext context)
     {
         try
@@ -133,6 +157,27 @@ public static partial class McpMod
             if (path == "/")
             {
                 SendJson(response, new { message = $"Hello from STS2 MCP v{Version}", status = "ok" });
+            }
+            else if (path == "/api/v1/pet/status")
+            {
+                if (request.HttpMethod == "GET")
+                    HandleGetPetStatus(response);
+                else
+                    SendError(response, 405, "Method not allowed");
+            }
+            else if (path == "/api/v1/pet/mode")
+            {
+                if (request.HttpMethod == "POST")
+                    HandlePostPetMode(request, response);
+                else
+                    SendError(response, 405, "Method not allowed");
+            }
+            else if (path == "/api/v1/pet/message")
+            {
+                if (request.HttpMethod == "POST")
+                    HandlePostPetMessage(request, response);
+                else
+                    SendError(response, 405, "Method not allowed");
             }
             else if (path == "/api/v1/singleplayer")
             {
@@ -184,6 +229,57 @@ public static partial class McpMod
         }
     }
 
+    private static void HandleGetPetStatus(HttpListenerResponse response)
+    {
+        SendPetBridgeResult(response, _petBridgeService.GetStatus());
+    }
+
+    private static void HandlePostPetMode(HttpListenerRequest request, HttpListenerResponse response)
+    {
+        if (!TryReadJsonBody(request, response, out PetModeRequest? body))
+            return;
+
+        SendPetBridgeResult(response, _petBridgeService.SetMode(body));
+    }
+
+    private static void HandlePostPetMessage(HttpListenerRequest request, HttpListenerResponse response)
+    {
+        if (!TryReadJsonBody(request, response, out PetMessageRequest? body))
+            return;
+
+        SendPetBridgeResult(response, _petBridgeService.SetMessage(body));
+    }
+
+    private static bool TryReadJsonBody<T>(HttpListenerRequest request, HttpListenerResponse response, out T? body)
+    {
+        string rawBody;
+        using (var reader = new StreamReader(request.InputStream, request.ContentEncoding))
+            rawBody = reader.ReadToEnd();
+
+        try
+        {
+            body = JsonSerializer.Deserialize<T>(rawBody, _jsonOptions);
+            return true;
+        }
+        catch
+        {
+            body = default;
+            SendError(response, 400, "Invalid JSON");
+            return false;
+        }
+    }
+
+    private static void SendPetBridgeResult(HttpListenerResponse response, PetBridgeResult<PetStatusResponse> result)
+    {
+        if (result.IsSuccess && result.Payload != null)
+        {
+            SendJson(response, result.Payload);
+            return;
+        }
+
+        SendError(response, result.StatusCode, result.Error ?? "Request failed");
+    }
+
     // Called on HTTP thread (not main thread) as a best-effort guard.
     // The try/catch handles race conditions during run transitions.
     // Authoritative checks happen inside RunOnMainThread lambdas.
@@ -218,7 +314,18 @@ public static partial class McpMod
         }
         catch (Exception ex)
         {
-            SendError(response, 500, $"Failed to read multiplayer game state: {ex.Message}");
+            GD.PrintErr($"[STS2 MCP] HandleGetMultiplayerState: {ex}");
+            try
+            {
+                response.StatusCode = 500;
+                SendJson(response, new Dictionary<string, object?>
+                {
+                    ["error"] = $"Failed to read multiplayer game state: {ex.Message}",
+                    ["exception_type"] = ex.GetType().FullName,
+                    ["stack_trace"] = ex.StackTrace
+                });
+            }
+            catch { /* response may be unusable */ }
         }
     }
 
@@ -270,8 +377,15 @@ public static partial class McpMod
 
             if (format == "markdown")
             {
-                string md = FormatAsMarkdown(state);
-                SendText(response, md, "text/markdown");
+                try
+                {
+                    SendText(response, FormatAsMarkdown(state), "text/markdown");
+                }
+                catch (Exception ex)
+                {
+                    GD.PrintErr($"[STS2 MCP] FormatAsMarkdown failed, returning JSON: {ex}");
+                    SendJson(response, state);
+                }
             }
             else
             {
@@ -280,7 +394,18 @@ public static partial class McpMod
         }
         catch (Exception ex)
         {
-            SendError(response, 500, $"Failed to read game state: {ex.Message}");
+            GD.PrintErr($"[STS2 MCP] HandleGetState: {ex}");
+            try
+            {
+                response.StatusCode = 500;
+                SendJson(response, new Dictionary<string, object?>
+                {
+                    ["error"] = $"Failed to read game state: {ex.Message}",
+                    ["exception_type"] = ex.GetType().FullName,
+                    ["stack_trace"] = ex.StackTrace
+                });
+            }
+            catch { /* response may be unusable */ }
         }
     }
 

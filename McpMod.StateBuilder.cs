@@ -56,9 +56,12 @@ public static partial class McpMod
             return result;
         }
 
-        // Card selection overlays can appear on top of any room (events, rest sites, combat)
+        // Overlays can appear on top of any room (events, rest sites, combat).
+        // Rewards/card-reward overlays defer to the map — they may linger on the
+        // overlay stack while the map opens after the player clicks proceed.
         var topOverlay = NOverlayStack.Instance?.Peek();
         var currentRoom = runState.CurrentRoom;
+        bool mapIsOpen = NMapScreen.Instance is { IsOpen: true };
         if (topOverlay is NCardGridSelectionScreen cardSelectScreen)
         {
             result["state_type"] = "card_select";
@@ -83,6 +86,16 @@ public static partial class McpMod
         {
             result["state_type"] = "crystal_sphere";
             result["crystal_sphere"] = BuildCrystalSphereState(crystalSphereScreen, runState);
+        }
+        else if (!mapIsOpen && topOverlay is NCardRewardSelectionScreen cardRewardScreen)
+        {
+            result["state_type"] = "card_reward";
+            result["card_reward"] = BuildCardRewardState(cardRewardScreen);
+        }
+        else if (!mapIsOpen && topOverlay is NRewardsScreen rewardsScreen)
+        {
+            result["state_type"] = "rewards";
+            result["rewards"] = BuildRewardsState(rewardsScreen, runState);
         }
         else if (topOverlay is IOverlayScreen
                  && topOverlay is not NRewardsScreen
@@ -116,7 +129,8 @@ public static partial class McpMod
             }
             else
             {
-                // After combat ends, check: map open (post-rewards) > overlays > fallback
+                // After combat ends — reward/card overlays are caught by top-level checks above.
+                // Only handle map and the brief transition before rewards appear.
                 if (NMapScreen.Instance is { IsOpen: true })
                 {
                     result["state_type"] = "map";
@@ -124,22 +138,8 @@ public static partial class McpMod
                 }
                 else
                 {
-                    var overlay = NOverlayStack.Instance?.Peek();
-                    if (overlay is NCardRewardSelectionScreen cardScreen)
-                    {
-                        result["state_type"] = "card_reward";
-                        result["card_reward"] = BuildCardRewardState(cardScreen);
-                    }
-                    else if (overlay is NRewardsScreen rewardsScreen)
-                    {
-                        result["state_type"] = "combat_rewards";
-                        result["rewards"] = BuildRewardsState(rewardsScreen, runState);
-                    }
-                    else
-                    {
-                        result["state_type"] = combatRoom.RoomType.ToString().ToLower();
-                        result["message"] = "Combat ended. Waiting for rewards...";
-                    }
+                    result["state_type"] = combatRoom.RoomType.ToString().ToLower();
+                    result["message"] = "Combat ended. Waiting for rewards...";
                 }
             }
         }
@@ -170,9 +170,11 @@ public static partial class McpMod
             }
             else
             {
-                // Auto-open the shopkeeper's inventory if not already open
+                // Auto-open the shopkeeper's inventory if not already open.
+                // NMerchantRoom.Inventory (UI node) can be null before the scene is fully ready;
+                // OpenInventory() itself accesses Inventory.IsOpen, so guard against null.
                 var merchUI = NMerchantRoom.Instance;
-                if (merchUI != null && !merchUI.Inventory.IsOpen)
+                if (merchUI?.Inventory != null && !merchUI.Inventory.IsOpen)
                 {
                     merchUI.OpenInventory();
                 }
@@ -271,7 +273,10 @@ public static partial class McpMod
         state["max_hp"] = creature.MaxHp;
         state["block"] = creature.Block;
 
-        if (combatState != null)
+        // PlayerCombatState can linger after combat while on map/rest/shop. Energy/MaxEnergy getters
+        // run hooks (e.g. Hook.ModifyMaxEnergy) that null-ref without a live combat — only serialize
+        // combat fields when a fight is actually in progress.
+        if (combatState != null && CombatManager.Instance.IsInProgress)
         {
             state["energy"] = combatState.Energy;
             state["max_energy"] = combatState.MaxEnergy;
@@ -305,10 +310,11 @@ public static partial class McpMod
             state["exhaust_pile"] = BuildPileCardList(combatState.ExhaustPile.Cards, PileType.Exhaust);
 
             // Orbs
-            if (combatState.OrbQueue.Capacity > 0)
+            var orbQueue = combatState.OrbQueue;
+            if (orbQueue != null && orbQueue.Capacity > 0)
             {
                 var orbs = new List<Dictionary<string, object?>>();
-                foreach (var orb in combatState.OrbQueue.Orbs)
+                foreach (var orb in orbQueue.Orbs)
                 {
                     // Populate SmartDescription placeholders with Focus-modified values,
                     // mirroring OrbModel.HoverTips getter (OrbModel.cs:92-94)
@@ -331,8 +337,8 @@ public static partial class McpMod
                     });
                 }
                 state["orbs"] = orbs;
-                state["orb_slots"] = combatState.OrbQueue.Capacity;
-                state["orb_empty_slots"] = combatState.OrbQueue.Capacity - combatState.OrbQueue.Orbs.Count;
+                state["orb_slots"] = orbQueue.Capacity;
+                state["orb_empty_slots"] = orbQueue.Capacity - orbQueue.Orbs.Count;
             }
         }
 
@@ -588,6 +594,15 @@ public static partial class McpMod
         var state = new Dictionary<string, object?>();
 
         var inventory = merchantRoom.Inventory;
+        if (inventory == null)
+        {
+            state["items"] = new List<Dictionary<string, object?>>();
+            state["can_proceed"] = NMerchantRoom.Instance?.ProceedButton?.IsEnabled ?? false;
+            state["error"] =
+                "Shop inventory is not ready yet (null). Often happens right after entering the merchant from the map; retry in a moment.";
+            return state;
+        }
+
         var items = new List<Dictionary<string, object?>>();
         int index = 0;
 
@@ -717,8 +732,8 @@ public static partial class McpMod
         if (mapScreen != null)
         {
             var travelable = FindAll<NMapPoint>(mapScreen)
-                .Where(mp => mp.State == MapPointState.Travelable)
-                .OrderBy(mp => mp.Point.coord.col)
+                .Where(mp => mp.State == MapPointState.Travelable && mp.Point != null)
+                .OrderBy(mp => mp.Point!.coord.col)
                 .ToList();
 
             int index = 0;
@@ -1366,36 +1381,40 @@ public static partial class McpMod
         {
             if (!power.IsVisible) continue;
 
-            // HoverTips resolves all dynamic vars (Amount, DynamicVars, etc.)
-            // The first tip is the power's own description; the rest are extra keywords
-            var allTips = power.HoverTips.ToList();
-            string? resolvedDesc = null;
-            var extraTips = new List<IHoverTip>();
-            foreach (var tip in allTips)
+            // Per-power try/catch: HoverTips getter calls into game engine code
+            // (LocString resolution, DynamicVars, virtual ExtraHoverTips) that can
+            // throw during state transitions. Skip the power rather than fail the
+            // entire state query.
+            try
             {
-                if (tip.Id == power.Id.ToString())
+                var allTips = power.HoverTips.ToList();
+                string? resolvedDesc = null;
+                var extraTips = new List<IHoverTip>();
+                foreach (var tip in allTips)
                 {
-                    // This is the power's own hover tip — extract its resolved description
-                    if (tip is HoverTip ht)
-                        resolvedDesc = StripRichTextTags(ht.Description);
+                    if (tip.Id == power.Id.ToString())
+                    {
+                        if (tip is HoverTip ht && ht.Description != null)
+                            resolvedDesc = StripRichTextTags(ht.Description);
+                    }
+                    else
+                    {
+                        extraTips.Add(tip);
+                    }
                 }
-                else
-                {
-                    extraTips.Add(tip);
-                }
-            }
-            // Fallback to raw SmartDescription if HoverTips extraction failed
-            resolvedDesc ??= SafeGetText(() => power.SmartDescription);
+                resolvedDesc ??= SafeGetText(() => power.SmartDescription);
 
-            powers.Add(new Dictionary<string, object?>
-            {
-                ["id"] = power.Id.Entry,
-                ["name"] = SafeGetText(() => power.Title),
-                ["amount"] = power.DisplayAmount,
-                ["type"] = power.Type.ToString(),
-                ["description"] = resolvedDesc,
-                ["keywords"] = BuildHoverTips(extraTips)
-            });
+                powers.Add(new Dictionary<string, object?>
+                {
+                    ["id"] = power.Id.Entry,
+                    ["name"] = SafeGetText(() => power.Title),
+                    ["amount"] = power.DisplayAmount,
+                    ["type"] = power.Type.ToString(),
+                    ["description"] = resolvedDesc,
+                    ["keywords"] = BuildHoverTips(extraTips)
+                });
+            }
+            catch { /* skip this power — game engine state may be inconsistent */ }
         }
         return powers;
     }
